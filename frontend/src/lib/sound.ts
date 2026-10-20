@@ -1,6 +1,11 @@
 /** Notification chime synthesised with WebAudio (no asset to load). Browsers keep the context suspended until a user gesture. */
 export type SoundState = 'ready' | 'blocked' | 'unsupported';
 
+const FLAG = 'piweb_crm_sound_unlocked';
+/** True once this browser has ever unlocked audio for the CRM; the "Enable sound" prompt never returns after that. */
+export function wasEverUnlocked(): boolean { try { return localStorage.getItem(FLAG) === '1'; } catch { return false; } }
+function markUnlocked() { try { localStorage.setItem(FLAG, '1'); } catch { /* storage unavailable */ } }
+
 let ctx: AudioContext | null = null;
 const listeners = new Set<() => void>();
 const Ctor: typeof AudioContext | undefined = typeof window !== 'undefined' ? (window.AudioContext || (window as any).webkitAudioContext) : undefined;
@@ -9,7 +14,7 @@ function ensure(): AudioContext | null {
   if (!Ctor) return null;
   if (!ctx) {
     ctx = new Ctor();
-    ctx.onstatechange = () => listeners.forEach((l) => l());
+    ctx.onstatechange = () => { if (ctx?.state === 'running') markUnlocked(); listeners.forEach((l) => l()); };
   }
   return ctx;
 }
@@ -25,6 +30,7 @@ export async function unlockSound(): Promise<SoundState> {
   const c = ensure();
   if (!c) return 'unsupported';
   try { await c.resume(); } catch { /* still blocked */ }
+  if (c.state === 'running') markUnlocked();
   listeners.forEach((l) => l());
   return getSoundState();
 }
@@ -48,7 +54,7 @@ export function playChime(): boolean {
 
 // The first real interaction anywhere on the page unlocks audio for later notifications.
 if (typeof window !== 'undefined') {
-  const unlock = () => { void unlockSound().then((s) => { if (s === 'ready') { window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); } }); };
-  window.addEventListener('pointerdown', unlock);
-  window.addEventListener('keydown', unlock);
+  const events = ['pointerdown', 'touchstart', 'click', 'keydown'] as const;
+  const unlock = () => { void unlockSound().then((s) => { if (s === 'ready') events.forEach((e) => window.removeEventListener(e, unlock)); }); };
+  events.forEach((e) => window.addEventListener(e, unlock, { passive: true }));
 }

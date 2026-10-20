@@ -4,11 +4,13 @@ import type { Lead, Remark } from '../lib/types';
 import { fmtDateTime } from '../lib/time';
 import { useRealtime } from '../realtime';
 import { ErrorState, Modal, Spinner, errMsg } from './ui';
+import { TagChip, TagPicker } from './TagPicker';
 
 export function RemarksModal({ lead, tz, onClose, onChanged }: { lead: Lead; tz: string; onClose(): void; onChanged(): void }) {
   const [items, setItems] = useState<Remark[] | null>(null);
   const [err, setErr] = useState('');
   const [text, setText] = useState('');
+  const [tagIds, setTagIds] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const { toast } = useRealtime();
 
@@ -19,9 +21,9 @@ export function RemarksModal({ lead, tz, onClose, onChanged }: { lead: Lead; tz:
   useEffect(load, [load]);
 
   const add = async () => {
-    if (!text.trim() || busy) return;
+    if ((!text.trim() && !tagIds.length) || busy) return;
     setBusy(true);
-    try { await post(`/leads/${lead.id}/remarks`, { text }); toast('info', 'Remark added'); onChanged(); onClose(); return; }
+    try { await post(`/leads/${lead.id}/remarks`, { text, tag_ids: tagIds }); toast('info', 'Remark added'); onChanged(); onClose(); return; }
     catch (e) { toast('error', 'Could not add remark', errMsg(e)); }
     finally { setBusy(false); }
   };
@@ -29,12 +31,14 @@ export function RemarksModal({ lead, tz, onClose, onChanged }: { lead: Lead; tz:
   return (
     <Modal title={`Remarks — ${lead.nickname || lead.lead_code}`} onClose={onClose} wide>
       <div className="mb-3">
-        <label className="label" htmlFor="new-remark">Add remark</label>
+        <label className="label">Quick tags</label>
+        <div className="mb-3"><TagPicker selected={tagIds} onChange={setTagIds} /></div>
+        <label className="label" htmlFor="new-remark">Add remark <span className="text-slate-400">(optional when a tag is picked)</span></label>
         <textarea id="new-remark" className="input min-h-[72px]" autoFocus maxLength={5000} value={text} placeholder="What happened on this lead?"
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void add(); }} />
         <div className="mt-1.5 flex items-center justify-between">
           <span className="text-[11px] text-slate-400">Ctrl/⌘ + Enter to save</span>
-          <button className="btn btn-primary" disabled={busy || !text.trim()} onClick={add}>{busy ? 'Saving…' : 'Add remark'}</button>
+          <button className="btn btn-primary" disabled={busy || (!text.trim() && !tagIds.length)} onClick={add}>{busy ? 'Saving…' : 'Add remark'}</button>
         </div>
       </div>
       {err ? <ErrorState message={err} onRetry={load} /> : !items ? <Spinner /> : items.length === 0 ? (
@@ -43,7 +47,8 @@ export function RemarksModal({ lead, tz, onClose, onChanged }: { lead: Lead; tz:
         <ol className="space-y-2">
           {items.map((r) => (
             <li key={r.id} className="rounded-md border border-slate-200 bg-slate-50 p-2.5">
-              <p className="whitespace-pre-wrap break-words text-sm">{r.text}</p>
+              {r.tags.length > 0 && <div className="mb-1 flex flex-wrap gap-1">{r.tags.map((t) => <TagChip key={t.id} tag={t} />)}</div>}
+              {r.text && <p className="whitespace-pre-wrap break-words text-sm">{r.text}</p>}
               <p className="mt-1 text-[11px] text-slate-500"><b>{r.author ?? 'Unknown'}</b> · {fmtDateTime(r.created_at, tz)}</p>
             </li>
           ))}

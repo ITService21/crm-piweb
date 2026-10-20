@@ -7,7 +7,7 @@ import { parse } from '../lib/validate.js';
 import { normalizePhone } from '../lib/phone.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { requireAssignable, get as getValue } from './selectable.js';
-import { LEAD_SELECT, LEAD_JOINS, accessClause, toLeadDto } from './leadQuery.js';
+import { LEAD_SELECT, LEAD_JOINS, accessClause, toLeadDto, tagsForRemarks } from './leadQuery.js';
 import { dayBounds } from '../lib/time.js';
 
 const optText = (max) => z.string().trim().max(max).nullable().optional().transform((v) => (v === undefined ? undefined : v || null));
@@ -28,11 +28,11 @@ const fields = {
   next_followup_at: followup.optional(),
 };
 const createSchema = z.object({ ...fields, status_id: z.number().int().positive().optional(), created_at: z.string().optional() }).strict();
-const updateSchema = z.object({ ...fields, status_id: z.number().int().positive().optional() }).strict();
+const updateSchema = z.object({ ...fields, status_id: z.number().int().positive().optional(), created_at: z.string().optional() }).strict();
 
 export const parseFollowup = (v) => (v === null ? null : DateTime.fromISO(v, { zone: config.tz }).toUTC().toJSDate());
 
-async function logActivity(conn, leadId, actorId, type, summary, before, after, now) {
+export async function logActivity(conn, leadId, actorId, type, summary, before, after, now) {
   await conn.query(
     'INSERT INTO lead_activities (lead_id,actor_user_id,action_type,summary,before_data,after_data,created_at) VALUES (?,?,?,?,?,?,?)',
     [leadId, actorId, type, summary.slice(0, 500), before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null, now]);
@@ -141,7 +141,7 @@ export async function getLead(id, user, now = new Date()) {
   const acc = accessClause(user);
   const [[row]] = await pool.query(`SELECT ${LEAD_SELECT} ${LEAD_JOINS} WHERE l.id = ? AND ${acc.sql}`, [id, ...acc.params]);
   if (!row) throw notFound('Lead not found');
-  return toLeadDto(row, dayBounds(now), now);
+  return toLeadDto(row, dayBounds(now), now, await tagsForRemarks([row.last_remark_id]));
 }
 
 async function lockLead(conn, id, user) {
@@ -222,6 +222,17 @@ export async function updateLead(id, input, user, now = new Date()) {
         act(type, text, { next_followup_at: cur.next_followup_at }, { next_followup_at: f });
       }
     }
+    // Creation date/time can be corrected (e.g. an enquiry logged late). It may not be in the future.
+    if (d.created_at !== undefined) {
+      const dt = DateTime.fromISO(d.created_at, { zone: config.tz });
+      if (!dt.isValid) throw badRequest('Invalid creation date/time');
+      if (dt.toMillis() > now.getTime() + 5 * 60 * 1000) throw badRequest('Creation date cannot be in the future');
+      const nextCreated = dt.toUTC().toJSDate();
+      if (nextCreated.getTime() !== new Date(cur.created_at).getTime()) {
+        set.created_at = nextCreated;
+        act('field_updated', `Created date changed: ${fmtFollowup(cur.created_at)} → ${fmtFollowup(nextCreated)}`, { created_at: cur.created_at }, { created_at: nextCreated });
+      }
+    }
     // Leaving the Active section ends the follow-up cycle.
     if (nextCategory !== 'active' && nextFollowup) {
       set.next_followup_at = null;
@@ -238,19 +249,31 @@ export async function updateLead(id, input, user, now = new Date()) {
   return getLead(id, { id: user.id, role: 'admin' }, now);
 }
 
-const remarkSchema = z.object({ text: z.string().trim().min(1, 'Remark cannot be empty').max(5000) });
+const remarkSchema = z.object({
+  text: z.string().trim().max(5000).optional().default(''),
+  tag_ids: z.array(z.number().int().positive()).max(8).optional().default([]),
+}).refine((v) => v.text.length > 0 || v.tag_ids.length > 0, { message: 'Write a remark or pick at least one tag', path: ['text'] });
 
 export async function addRemark(id, input, user, now = new Date()) {
-  const { text } = parse(remarkSchema, input);
+  const { text, tag_ids: tagIds } = parse(remarkSchema, input);
+  const uniqTags = [...new Set(tagIds)];
   const remarkId = await withTx(async (conn) => {
     const lead = await lockLead(conn, id, user);
     if (lead.removed_at) throw conflict('This lead is removed. Restore it before adding remarks.');
+    let tags = [];
+    if (uniqTags.length) {
+      [tags] = await conn.query("SELECT id, label FROM selectable_values WHERE id IN (?) AND category = 'remark_tag' AND is_active = 1 ORDER BY sort_order, id", [uniqTags]);
+      if (tags.length !== uniqTags.length) throw badRequest('One of the selected tags is invalid or switched off');
+    }
     const [r] = await conn.query('INSERT INTO lead_remarks (lead_id,remark_text,created_by,created_at) VALUES (?,?,?,?)', [id, text, user.id, now]);
+    if (tags.length) await conn.query('INSERT INTO lead_remark_tags (remark_id, tag_id) VALUES ?', [tags.map((t) => [r.insertId, t.id])]);
     await conn.query(
-      `UPDATE leads SET last_remark_text=?, last_remark_by=?, last_remark_at=?, remarks_count=remarks_count+1,
+      `UPDATE leads SET last_remark_text=?, last_remark_by=?, last_remark_at=?, last_remark_id=?, remarks_count=remarks_count+1,
          last_action_by=?, last_action_at=?, updated_at=?, updated_by=? WHERE id=?`,
-      [text, user.id, now, user.id, now, now, user.id, id]);
-    await logActivity(conn, id, user.id, 'remark_added', `Remark added: ${text.length > 120 ? `${text.slice(0, 117)}…` : text}`, null, null, now);
+      [text, user.id, now, r.insertId, user.id, now, now, user.id, id]);
+    const tagTxt = tags.length ? `[${tags.map((t) => t.label).join(', ')}] ` : '';
+    const body = text.length > 120 ? `${text.slice(0, 117)}…` : text;
+    await logActivity(conn, id, user.id, 'remark_added', `Remark added: ${tagTxt}${body}`.trim(), null, tags.length ? { tags: tags.map((t) => t.label) } : null, now);
     return r.insertId;
   });
   return { id: remarkId };
@@ -261,7 +284,8 @@ export async function listRemarks(id, user) {
   const [rows] = await pool.query(
     `SELECT r.id, r.remark_text AS text, r.created_at, r.created_by, u.name AS author
      FROM lead_remarks r LEFT JOIN users u ON u.id = r.created_by WHERE r.lead_id = ? ORDER BY r.created_at DESC, r.id DESC`, [id]);
-  return rows;
+  const tags = await tagsForRemarks(rows.map((r) => r.id));
+  return rows.map((r) => ({ ...r, tags: tags.get(r.id) ?? [] }));
 }
 
 export async function listActivities(id, user) {
@@ -281,11 +305,11 @@ export async function removeLead(id, input, user, now = new Date()) {
     const cur = await lockLead(conn, id, user);
     if (cur.removed_at) throw conflict('This lead is already removed.');
     const text = `Removed: ${reason}`;
-    await conn.query('INSERT INTO lead_remarks (lead_id,remark_text,created_by,created_at) VALUES (?,?,?,?)', [id, text, user.id, now]);
+    const [rem] = await conn.query('INSERT INTO lead_remarks (lead_id,remark_text,created_by,created_at) VALUES (?,?,?,?)', [id, text, user.id, now]);
     await conn.query(
-      `UPDATE leads SET removed_at=?, removed_by=?, removed_reason=?, last_remark_text=?, last_remark_by=?, last_remark_at=?, remarks_count=remarks_count+1,
+      `UPDATE leads SET removed_at=?, removed_by=?, removed_reason=?, last_remark_text=?, last_remark_by=?, last_remark_at=?, last_remark_id=?, remarks_count=remarks_count+1,
          last_action_by=?, last_action_at=?, updated_at=?, updated_by=? WHERE id=?`,
-      [now, user.id, reason, text, user.id, now, user.id, now, now, user.id, id]);
+      [now, user.id, reason, text, user.id, now, rem.insertId, user.id, now, now, user.id, id]);
     await logActivity(conn, id, user.id, 'lead_removed', `Lead removed: ${reason.length > 120 ? `${reason.slice(0, 117)}…` : reason}`, null, null, now);
     // a removed lead must not leave "unread new lead" badges behind
     await conn.query('UPDATE notifications SET read_at = ? WHERE lead_id = ? AND read_at IS NULL', [now, id]);

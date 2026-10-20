@@ -27,7 +27,7 @@ export function AllocateModal({ ids, mode = 'allocate', onClose, onDone }: { ids
       const n: number = assign ? r.data.assigned : r.data.allocated;
       const skipped = r.data.skipped.length;
       const verb = assign ? 'assigned' : 'allocated';
-      toast(n ? 'info' : 'error', n ? `${n} lead${n === 1 ? '' : 's'} ${unassign ? 'unassigned' : `${verb} to ${target?.name}`}` : `Nothing was ${verb}`,
+      toast(n ? (skipped ? 'warn' : 'info') : 'error', n ? `${n} lead${n === 1 ? '' : 's'} ${unassign ? 'unassigned' : `${verb} to ${target?.name}`}` : `Nothing was ${verb}`,
         skipped ? `${skipped} skipped (${[...new Set((r.data.skipped as { reason: string }[]).map((x) => x.reason))].join(', ')})` : undefined);
       onDone(); onClose();
     } catch (e) { setErr(errMsg(e)); setBusy(false); }

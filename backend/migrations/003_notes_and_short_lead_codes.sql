@@ -1,5 +1,6 @@
 -- Shorter lead codes: LD-005 instead of LD-000005 (grows naturally past 999)
-UPDATE leads SET lead_code = CONCAT('LD-', LPAD(id, 3, '0'));
+-- NOTE: LPAD() *truncates* values longer than its width, so ids >= 1000 must not go through it.
+UPDATE leads SET lead_code = CONCAT('LD-', IF(id < 1000, LPAD(id, 3, '0'), CAST(id AS CHAR)));
 
 -- Reusable message scripts (WhatsApp / email) shared by the team
 CREATE TABLE notes (

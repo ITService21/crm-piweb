@@ -2,7 +2,8 @@ import type { TabKey } from '../lib/types';
 
 const OPTIONS: Partial<Record<TabKey, { key: string; label: string }[]>> = {
   leads: [
-    { key: 'all', label: 'All Leads' }, { key: 'new', label: 'New Leads' }, { key: 'today', label: "Today's Follow-ups" },
+    { key: 'all', label: 'All Leads' }, { key: 'today_leads', label: "Today's Leads" }, { key: 'yesterday_leads', label: "Yesterday's Leads" },
+    { key: 'last7_leads', label: 'Last 7 Days' },  { key: 'today', label: "Today's Follow-ups" },
     { key: 'overdue', label: 'Overdue Follow-ups' }, { key: 'custom', label: 'Custom Range' },
   ],
   scheduled: [

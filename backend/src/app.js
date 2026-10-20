@@ -17,6 +17,7 @@ import userRoutes from './routes/users.js';
 import prefRoutes from './routes/preferences.js';
 import notifRoutes from './routes/notifications.js';
 import noteRoutes from './routes/notes.js';
+import { billingRouter, billingMiscRouter } from './routes/billing.js';
 import publicRoutes, { publicLeadHandler, publicLeadLimiter } from './routes/public.js';
 import jwt from 'jsonwebtoken';
 import { COOKIE_NAME } from './middleware/auth.js';
@@ -62,6 +63,9 @@ export function createApp() {
   app.use('/api/preferences', requireAuth, prefRoutes);
   app.use('/api/notifications', requireAuth, notifRoutes);
   app.use('/api/notes', requireAuth, noteRoutes);
+  app.use('/api/invoices', requireAuth, billingRouter('invoice'));
+  app.use('/api/quotations', requireAuth, billingRouter('quotation'));
+  app.use('/api/billing', requireAuth, billingMiscRouter);
   app.use('/api', (_req, res) => fail(res, 404, 'Not found', 'NOT_FOUND'));
 
   // Optionally serve the built SPA (when not fronted by Nginx static serving).
@@ -74,6 +78,7 @@ export function createApp() {
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     if (err instanceof HttpError) return fail(res, err.status, err.message, err.code, err.details);
+    if (err.name === 'MulterError') return fail(res, err.code === 'LIMIT_FILE_SIZE' ? 413 : 400, err.code === 'LIMIT_FILE_SIZE' ? 'That file is too large (maximum 8 MB).' : err.code === 'LIMIT_FILE_COUNT' ? 'Too many files (maximum 6 at a time).' : 'Upload failed.', 'UPLOAD_ERROR');
     if (err.type === 'entity.parse.failed') return fail(res, 400, 'Malformed JSON', 'BAD_REQUEST');
     console.error('Unhandled error:', err.message);
     return fail(res, 500, 'Internal server error', 'INTERNAL');

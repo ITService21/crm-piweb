@@ -88,3 +88,7 @@ temp/
 *.tmp
 
 # NOTE: package-lock.json is intentionally committed so `npm ci` installs the exact tested versions.
+
+# Uploaded payment proofs (client data) — never commit
+backend/uploads/
+uploads/

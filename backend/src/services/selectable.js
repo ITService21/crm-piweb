@@ -10,7 +10,7 @@ export const CATEGORY_LEAD_COLUMN = {
   special_markup: 'special_markup_id',
   lead_source: 'source_id',
 };
-export const BUILTIN_CATEGORIES = Object.keys(CATEGORY_LEAD_COLUMN);
+export const BUILTIN_CATEGORIES = [...Object.keys(CATEGORY_LEAD_COLUMN), 'remark_tag'];
 
 const colour = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a #RRGGBB colour').nullable().optional();
 const slug = z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,63}$/, 'Use lowercase letters, digits and underscores');
@@ -28,7 +28,7 @@ const createSchema = z.object({
 });
 const updateSchema = createSchema.omit({ category: true, value_key: true }).partial();
 
-const toKey = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'value';
+export const toKey = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'value';
 
 function validateStatusRules(category, row) {
   if (category === 'lead_status') {
@@ -71,6 +71,10 @@ export async function requireAssignable(conn, id, category) {
 }
 
 export async function usageCount(row) {
+  if (row.category === 'remark_tag') {
+    const [[t]] = await pool.query('SELECT COUNT(*) AS n FROM lead_remark_tags WHERE tag_id = ?', [row.id]);
+    return t.n;
+  }
   const col = CATEGORY_LEAD_COLUMN[row.category];
   if (!col) return 0;
   const [[r]] = await pool.query(`SELECT COUNT(*) AS n FROM leads WHERE ${col} = ?`, [row.id]);
@@ -154,6 +158,11 @@ export async function migrateLeads(fromId, toId, actorId) {
     if (!from || !to) throw notFound('Value not found');
     if (from.category !== to.category) throw badRequest('Values must be in the same category');
     if (!to.is_active) throw badRequest('Target value is inactive');
+    if (from.category === 'remark_tag') {
+      const [r] = await conn.query('UPDATE IGNORE lead_remark_tags SET tag_id = ? WHERE tag_id = ?', [toId, fromId]);
+      await conn.query('DELETE FROM lead_remark_tags WHERE tag_id = ?', [fromId]);
+      return { moved: r.affectedRows };
+    }
     const col = CATEGORY_LEAD_COLUMN[from.category];
     if (!col) return { moved: 0 };
     const now = new Date();
@@ -173,4 +182,19 @@ export async function migrateLeads(fromId, toId, actorId) {
 export async function statusMap() {
   const rows = await list({ category: 'lead_status', includeInactive: true });
   return new Map(rows.map((r) => [r.id, r]));
+}
+
+const TAG_COLOURS = ['#ef4444', '#f59e0b', '#0ea5e9', '#6366f1', '#16a34a', '#a855f7', '#ec4899', '#14b8a6', '#64748b'];
+
+/** Any signed-in user may add a remark tag on the fly. Idempotent by name; refuses to resurrect an inactive tag silently. */
+export async function createTag(input) {
+  const { label } = parse(z.object({ label: z.string().trim().min(1, 'Tag name is required').max(40) }), input);
+  const key = toKey(label);
+  const [[existing]] = await pool.query("SELECT * FROM selectable_values WHERE category='remark_tag' AND value_key = ?", [key]);
+  if (existing) {
+    if (!existing.is_active) throw conflict(`The tag "${existing.label}" exists but is switched off. Ask an admin to re-enable it in Settings.`);
+    return shape(existing);
+  }
+  const [[n]] = await pool.query("SELECT COUNT(*) AS n FROM selectable_values WHERE category='remark_tag'");
+  return create({ category: 'remark_tag', label, value_key: key, colour: TAG_COLOURS[n.n % TAG_COLOURS.length] });
 }

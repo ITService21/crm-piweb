@@ -154,13 +154,13 @@ export function LeadListPage({ tab }: { tab: TabKey }) {
       const q2 = new URLSearchParams(baseQuery); if (statusId) q2.set('status', String(statusId));
       const r = await get<{ ids: number[]; capped: boolean }>(`/leads/ids?${q2}`);
       setSelected(new Set(r.data.ids));
-      if (r.data.capped) toast('info', `Selected the first ${r.data.ids.length} leads`, 'Narrow the filters to select the rest.');
+      if (r.data.capped) toast('warn', `Selected the first ${r.data.ids.length} leads`, 'Narrow the filters to select the rest.');
     } catch (e) { toast('error', 'Could not select all', errMsg(e)); }
   };
   const release = async (ids: number[]) => {
     try {
       const r = await post<{ allocated: number; skipped: { reason: string }[] }>('/leads/allocate', { lead_ids: ids, user_id: null });
-      toast(r.data.allocated ? 'info' : 'error', r.data.allocated ? `${r.data.allocated} allocation${r.data.allocated === 1 ? '' : 's'} cleared` : 'Nothing to clear',
+      toast(r.data.allocated ? (r.data.skipped.length ? 'warn' : 'info') : 'error', r.data.allocated ? `${r.data.allocated} allocation${r.data.allocated === 1 ? '' : 's'} cleared` : 'Nothing to clear',
         r.data.skipped.length ? `${r.data.skipped.length} skipped (${[...new Set(r.data.skipped.map((x) => x.reason))].join(', ')})` : undefined);
       setSelected(new Set()); changed();
     } catch (e) { toast('error', 'Could not clear allocation', errMsg(e)); }

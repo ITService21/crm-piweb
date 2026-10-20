@@ -74,6 +74,12 @@ export function buildWhere(user, f, now, { includeStatus = true, includeMarkup =
       // "New Leads" = created in the range AND still in the New state (worked-on leads drop out)
       const r = rangeFromTo({ from: f.from || b.today, to: f.to || b.today }, 'l.created_at');
       where.push('st.is_new_state = 1', ...r.parts); params.push(...r.params);
+    } else if (df === 'today_leads') { // leads created today (business timezone), any status
+      where.push('l.created_at >= ? AND l.created_at < ?'); params.push(b.todayStart, b.tomorrowStart);
+    } else if (df === 'yesterday_leads') {
+      where.push('l.created_at >= ? AND l.created_at < ?'); params.push(dayStartUtc(addDaysStr(b.today, -1)), b.todayStart);
+    } else if (df === 'last7_leads') { // today + the previous 6 calendar days
+      where.push('l.created_at >= ? AND l.created_at < ?'); params.push(dayStartUtc(addDaysStr(b.today, -6)), b.tomorrowStart);
     } else if (df === 'today') {
       where.push('l.next_followup_at >= ? AND l.next_followup_at < ?'); params.push(b.todayStart, b.tomorrowStart);
     } else if (df === 'overdue') {
@@ -159,7 +165,7 @@ export function priorityReason(row, bounds, now) {
   return null;
 }
 
-export function toLeadDto(r, bounds, now) {
+export function toLeadDto(r, bounds, now, tagMap = new Map()) {
   return {
     id: r.id, lead_code: r.lead_code, created_at: r.created_at,
     status: { id: r.status_id, label: r.status_label, colour: r.status_colour, category: r.status_category, is_new_state: !!r.is_new_state },
@@ -172,7 +178,7 @@ export function toLeadDto(r, bounds, now) {
     last_action_at: r.last_action_at,
     assigned_to: r.assigned_to ? { id: r.assigned_to, name: r.assigned_name } : null,
     created_by: r.created_by ? { id: r.created_by, name: r.created_by_name } : null,
-    last_remark: r.last_remark_text ? { text: r.last_remark_text, by: r.last_remark_by_name, at: r.last_remark_at } : null,
+    last_remark: r.last_remark_at ? { text: r.last_remark_text || '', by: r.last_remark_by_name, at: r.last_remark_at, tags: tagMap.get(r.last_remark_id) ?? [] } : null,
     remarks_count: r.remarks_count,
     updated_at: r.updated_at,
     allocated: r.allocated_to ? { to: { id: r.allocated_to, name: r.allocated_to_name }, by: r.allocated_by ? { id: r.allocated_by, name: r.allocated_by_name } : null, at: r.allocated_at } : null,
@@ -191,8 +197,9 @@ export async function listLeads(user, f, now = new Date()) {
   const [rows] = await pool.query(
     `SELECT ${LEAD_SELECT} ${LEAD_JOINS} WHERE ${w.where} ORDER BY ${ord.sql} LIMIT ? OFFSET ?`,
     [...w.params, ...ord.params, pageSize, (page - 1) * pageSize]);
+  const tagMap = await tagsForRemarks(rows.map((r) => r.last_remark_id));
   return {
-    items: rows.map((r) => toLeadDto(r, w.bounds, now)),
+    items: rows.map((r) => toLeadDto(r, w.bounds, now, tagMap)),
     meta: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
   };
 }
@@ -223,10 +230,14 @@ export async function sidebarSummary(user, now = new Date()) {
     `SELECT COUNT(*) AS n ${LEAD_JOINS} WHERE ${acc.sql} AND l.removed_at IS NULL AND st.status_category='active' AND st.is_new_state=0 AND l.next_followup_at >= ?`,
     [...acc.params, b.tomorrowStart]);
   const [[rem]] = await pool.query(`SELECT COUNT(*) AS n ${LEAD_JOINS} WHERE ${acc.sql} AND l.removed_at IS NOT NULL`, acc.params);
-  return { unread_new_leads: unread.n, overdue_followups: over.n, scheduled_followups: sched.n, removed: rem.n };
+  // invoices whose promised payment date has arrived and still have a balance
+  const [[pay]] = await pool.query(
+    `SELECT COUNT(*) AS n FROM billing_documents d JOIN leads l ON l.id = d.lead_id WHERE ${acc.sql} AND d.doc_type = 'invoice' AND d.status IN ('issued','partially_paid')
+       AND d.next_payment_due IS NOT NULL AND d.next_payment_due <= ? AND d.total > d.amount_paid`, [...acc.params, b.today]);
+  return { unread_new_leads: unread.n, overdue_followups: over.n, scheduled_followups: sched.n, removed: rem.n, payment_followups: pay.n };
 }
 
-const DATE_KEYS = { leads: ['all', 'new', 'today', 'overdue', 'custom'], scheduled: ['tomorrow', 'next7', 'next30', 'custom', 'all'] };
+const DATE_KEYS = { leads: ['all', 'today_leads', 'yesterday_leads', 'last7_leads', 'new', 'today', 'overdue', 'custom'], scheduled: ['tomorrow', 'next7', 'next30', 'custom', 'all'] };
 
 /** Count per date-filter button, honouring search / agent / status but not the date filter itself. */
 export async function countByDateFilter(user, f, now = new Date()) {
@@ -252,3 +263,16 @@ export async function listLeadIds(user, f, now = new Date()) {
   const [rows] = await pool.query(`SELECT l.id ${LEAD_JOINS} WHERE ${w.where} ORDER BY l.id DESC LIMIT ?`, [...w.params, ID_CAP + 1]);
   return { ids: rows.slice(0, ID_CAP).map((r) => r.id), capped: rows.length > ID_CAP };
 }
+
+/** Tags for a set of remark ids -> Map(remarkId -> [{id,label,colour}]) */
+export async function tagsForRemarks(remarkIds, conn = pool) {
+  const ids = [...new Set(remarkIds.filter(Boolean))];
+  const map = new Map();
+  if (!ids.length) return map;
+  const [rows] = await conn.query(
+    `SELECT rt.remark_id, t.id, t.label, t.colour FROM lead_remark_tags rt JOIN selectable_values t ON t.id = rt.tag_id
+     WHERE rt.remark_id IN (?) ORDER BY t.sort_order, t.id`, [ids]);
+  for (const r of rows) { if (!map.has(r.remark_id)) map.set(r.remark_id, []); map.get(r.remark_id).push({ id: r.id, label: r.label, colour: r.colour }); }
+  return map;
+}
+

@@ -117,6 +117,12 @@ nano .env
 | `DB_PASSWORD` | `<STRONG-DB-PASSWORD>` | |
 | `DB_SOCKET` | *(optional)* | Only if you connect via a unix socket, e.g. `/var/run/mysqld/mysqld.sock`. |
 | `JWT_SECRET` | output of `openssl rand -hex 48` | Required, ≥ 32 chars. Changing it logs everyone out. |
+| `SMTP_HOST` | `smtp.gmail.com` (Google Workspace/Gmail) or e.g. `smtp.hostinger.com` | Needed only to **email** quotations/invoices. Leave empty to disable emailing — PDFs still download. Use the SMTP details of a real mailbox (e.g. one on your domain). |
+| `SMTP_PORT` / `SMTP_SECURE` | `465` / `true`, or `587` / `false` | 465 = implicit TLS, 587 = STARTTLS. |
+| `SMTP_USER` / `SMTP_PASS` | the mailbox login | For Google: the address and a 16-letter **App password** (not the normal password). Keep in `.env` only (chmod 600). Never commit. The production `.env` is separate from your laptop's, so add these there too. |
+| `MAIL_FROM` | `Piweb Tech <billing@yourdomain>` | Defaults to `SMTP_USER`. Use an address your mail host allows you to send from. |
+| `MAIL_REPLY_TO` | optional | Where client replies go. |
+| `SESSION_DAYS` | `7` | How long a login lasts. After this people must sign in again. |
 | `COOKIE_SECURE` | `true` | Session cookie only over HTTPS. If login "works" but you're bounced back, check this and HTTPS. |
 | `TRUST_PROXY` | `1` | **Important.** Lets the app see each visitor's real IP from Nginx; without it the login and lead-form rate limits apply to *everyone together*. |
 | `BUSINESS_TZ` | `Asia/Kolkata` | Used for "today", overdue and date filters. |
@@ -134,6 +140,15 @@ Create the tables and the first admin (migrations are safe to re-run):
 npm run seed        # reads SEED_ADMIN_* from .env; prints "admin ... created"
 ```
 Then delete the two `SEED_ADMIN_*` lines from `.env`. Add more users later in the CRM under **Settings → Users**, or with `npm run create-user -- email@example.com 'password' agent`.
+
+> **Payment proofs (screenshots)** are saved on disk, not in the database. Create the folder once and keep it out of the web root:
+> ```bash
+> sudo mkdir -p /var/lib/piweb-crm/uploads && sudo chown <app-user>: /var/lib/piweb-crm/uploads && sudo chmod 750 /var/lib/piweb-crm/uploads
+> # backend/.env →  UPLOAD_DIR=/var/lib/piweb-crm/uploads
+> ```
+> Nginx must allow the upload size: `client_max_body_size 12m;` (already in `deploy/nginx-crm.conf.example`; reload Nginx after changing it). **Back this folder up together with the database** — the database only stores the file names.
+>
+> **Quotations & invoices** need nothing else on the server except the optional SMTP settings above: the PDF engine is pure Node (no browser), and its font ships inside the project (`backend/assets/fonts`), so keep that folder when you upload.
 
 ## 8. Frontend: build
 Either on the server:

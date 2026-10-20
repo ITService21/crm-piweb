@@ -4,7 +4,8 @@ server {
     listen 80;
     server_name crm.piwebtechnology.com;
     location /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 301 https://$host$request_uri; }
+    # 308 (not 301) so a POST to http:// is replayed as a POST, not turned into a GET
+    location / { return 308 https://$host$request_uri; }
 }
 
 server {
@@ -15,7 +16,7 @@ server {
 
     root /var/www/piweb-crm/frontend/dist;
     index index.html;
-    client_max_body_size 200k;
+    client_max_body_size 12m;   # payment-proof uploads (8 MB per file, a few files at once); everything else is tiny
 
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options nosniff always;

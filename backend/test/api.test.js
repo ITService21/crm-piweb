@@ -261,32 +261,6 @@ test('lead codes are short: LD-005 style, growing past 999', async () => {
   assert.ok(r.lead_code.length <= 7 || r.id > 999);
 });
 
-test('notes: create/validate, subject rules, copy ranking per category, permissions', async () => {
-  const wa = await admin.req('POST', '/api/notes', { category: 'whatsapp', title: 'Intro', content: 'Hi! Thanks for your enquiry.', subject: 'ignored' });
-  assert.equal(wa.status, 201); assert.equal(wa.body.data.subject, null, 'whatsapp notes have no subject');
-  assert.equal((await admin.req('POST', '/api/notes', { category: 'email', title: 'No subject', content: 'x' })).status, 400);
-  assert.equal((await admin.req('POST', '/api/notes', { category: 'sms', title: 't', content: 'x' })).status, 400);
-  assert.equal((await admin.req('POST', '/api/notes', { category: 'whatsapp', title: '  ', content: 'x' })).status, 400);
-  const em = (await a1.req('POST', '/api/notes', { category: 'email', title: 'Proposal', subject: 'Your website proposal', content: 'Dear client,\n\nPlease find…' })).body.data;
-  const wa2 = (await admin.req('POST', '/api/notes', { category: 'whatsapp', title: 'Follow-up', content: 'Just checking in.' })).body.data;
-  // copying wa2 twice and the email subject (does not count) / content once
-  await admin.req('POST', `/api/notes/${wa2.id}/copy`, {}); await admin.req('POST', `/api/notes/${wa2.id}/copy`, { part: 'content' });
-  assert.equal((await admin.req('POST', `/api/notes/${em.id}/copy`, { part: 'subject' })).body.data.copy_count, 0);
-  assert.equal((await admin.req('POST', `/api/notes/${em.id}/copy`, { part: 'content' })).body.data.copy_count, 1);
-  const list = await admin.req('GET', '/api/notes?category=whatsapp');
-  assert.equal(list.body.data[0].id, wa2.id, 'copied note first');
-  assert.equal(list.body.meta.stats.whatsapp.notes, 2); assert.equal(list.body.meta.stats.whatsapp.copies, 2);
-  assert.equal(list.body.meta.stats.email.notes, 1); assert.equal(list.body.meta.stats.all.notes, 3);
-  assert.equal((await admin.req('GET', '/api/notes?q=checking')).body.data.length, 1);
-  // edit (anyone), switch category rules, delete (author/admin only)
-  assert.equal((await admin.req('PATCH', `/api/notes/${em.id}`, { content: 'Edited' })).body.data.content, 'Edited'); // not the author
-  assert.equal((await admin.req('PATCH', `/api/notes/${em.id}`, { category: 'whatsapp' })).body.data.subject, null);
-  assert.equal((await new Client(srv.base).req('GET', '/api/notes')).status, 401);
-  assert.equal((await a1.req('DELETE', `/api/notes/${wa2.id}`)).status, 403);
-  assert.equal((await admin.req('DELETE', `/api/notes/${wa2.id}`)).status, 200);
-  assert.equal((await admin.req('DELETE', `/api/notes/${wa2.id}`)).status, 404);
-});
-
 test('remove: remark required, lead moves to Removed only, vanishes everywhere else, is logged, locked, and restorable', async () => {
   const lead = (await admin.req('POST', '/api/leads', { phone: '9833300001', nickname: 'RemoveMe' })).body.data;
   await admin.req('POST', `/api/leads/${lead.id}/followup`, { next_followup_at: '2020-01-01T10:00' }); // overdue
@@ -404,20 +378,6 @@ test('select-all ids across pages, and back-dated creation time for CRM-created 
   assert.ok(new Date(prow.created_at).getFullYear() >= 2026 && Date.now() - new Date(prow.created_at).getTime() < 60000);
 });
 
-test('notes: the most recently copied note moves to the top of its category', async () => {
-  const mk = async (title) => (await admin.req('POST', '/api/notes', { category: 'whatsapp', title, content: `body ${title}` })).body.data;
-  const [a, b, c] = [await mk('RecA'), await mk('RecB'), await mk('RecC')];
-  const order = async () => (await admin.req('GET', '/api/notes?category=whatsapp&q=Rec')).body.data.map((n) => n.title);
-  await admin.req('POST', `/api/notes/${a.id}/copy`, {}); await new Promise((r) => setTimeout(r, 15));
-  await admin.req('POST', `/api/notes/${b.id}/copy`, {}); await new Promise((r) => setTimeout(r, 15));
-  await admin.req('POST', `/api/notes/${b.id}/copy`, {}); await new Promise((r) => setTimeout(r, 15));
-  assert.deepEqual((await order()).slice(0, 2), ['RecB', 'RecA']);
-  await admin.req('POST', `/api/notes/${a.id}/copy`, {}); // A has 2 copies, B has 2: A is newest -> top
-  assert.deepEqual(await order(), ['RecA', 'RecB', 'RecC'], 'copied last => first; never-copied last');
-  await admin.req('POST', `/api/notes/${c.id}/copy`, { part: 'subject' }); // subject copies do not move a note
-  assert.deepEqual(await order(), ['RecA', 'RecB', 'RecC']);
-});
-
 test('bulk assign: any user can assign leads to another user (or unassign); logged; owner changes, allocation untouched', async () => {
   const vik = new Client(srv.base); await vik.login('vikram@t.test', 'vikram-pass-123');
   const vikId = (await admin.req('GET', '/api/users')).body.data.find((u) => u.email === 'vikram@t.test').id;
@@ -445,4 +405,132 @@ test('bulk assign: any user can assign leads to another user (or unassign); logg
   // removed leads are skipped
   await admin.req('POST', `/api/leads/${l1.id}/remove`, { reason: 't' });
   assert.equal((await admin.req('POST', '/api/leads/assign', { lead_ids: [l1.id], user_id: vikId })).body.data.skipped[0].reason, 'removed');
+});
+
+test('creation date/time can be edited on an existing lead (validated, logged, not future)', async () => {
+  const lead = (await admin.req('POST', '/api/leads', { phone: '9877712345' })).body.data;
+  const r = await admin.req('PATCH', `/api/leads/${lead.id}`, { created_at: '2026-09-01T10:30' });
+  assert.equal(r.status, 200);
+  assert.equal(new Date(r.body.data.created_at).toISOString(), '2026-09-01T05:00:00.000Z', '10:30 IST stored as UTC');
+  const acts = (await admin.req('GET', `/api/leads/${lead.id}/activities`)).body.data;
+  assert.ok(acts.some((a) => a.action_type === 'field_updated' && /Created date changed/.test(a.summary)));
+  const before = acts.length;
+  await admin.req('PATCH', `/api/leads/${lead.id}`, { created_at: '2026-09-01T10:30' }); // same value => no new activity
+  assert.equal((await admin.req('GET', `/api/leads/${lead.id}/activities`)).body.data.length, before);
+  assert.equal((await admin.req('PATCH', `/api/leads/${lead.id}`, { created_at: '2999-01-01T00:00' })).status, 400);
+  assert.equal((await admin.req('PATCH', `/api/leads/${lead.id}`, { created_at: 'garbage' })).status, 400);
+  assert.equal((await new Client(srv.base).req('PATCH', `/api/leads/${lead.id}`, { created_at: '2026-09-01T10:30' })).status, 401);
+});
+
+test('remark tags: quick tags, tag-only remarks, custom tags by any user, validation, history', async () => {
+  const vals = (await admin.req('GET', '/api/settings/values?category=remark_tag')).body.data;
+  const cnp = vals.find((v) => v.value_key === 'call_not_picked'); const busy = vals.find((v) => v.value_key === 'busy');
+  assert.ok(cnp && busy, 'default tags exist');
+  const lead = (await admin.req('POST', '/api/leads', { phone: '9877700099' })).body.data;
+  // tag-only remark is allowed; an empty one is not; bad tag ids are rejected
+  assert.equal((await admin.req('POST', `/api/leads/${lead.id}/remarks`, { text: '', tag_ids: [] })).status, 400);
+  assert.equal((await admin.req('POST', `/api/leads/${lead.id}/remarks`, { tag_ids: [999999] })).status, 400);
+  assert.equal((await admin.req('POST', `/api/leads/${lead.id}/remarks`, { tag_ids: [cnp.id] })).status, 201);
+  assert.equal((await a1.req('POST', `/api/leads/${lead.id}/remarks`, { text: 'Rang twice', tag_ids: [cnp.id, busy.id, cnp.id] })).status, 201);
+  const remarks = (await admin.req('GET', `/api/leads/${lead.id}/remarks`)).body.data;
+  assert.deepEqual(remarks[0].tags.map((t) => t.label).sort(), ['Busy', 'Call not picked']);
+  assert.equal(remarks[0].text, 'Rang twice'); assert.equal(remarks[1].text, ''); assert.deepEqual(remarks[1].tags.map((t) => t.label), ['Call not picked']);
+  // the list shows the latest remark with its tags
+  const row = (await admin.req('GET', `/api/leads?tab=leads&q=9877700099`)).body.data[0];
+  assert.equal(row.last_remark.text, 'Rang twice'); assert.equal(row.last_remark.tags.length, 2);
+  assert.ok((await admin.req('GET', `/api/leads/${lead.id}/activities`)).body.data.some((a) => /\[Busy, Call not picked\] Rang twice|\[Call not picked, Busy\] Rang twice/.test(a.summary)));
+  // any signed-in user can create a tag; same name returns the same tag; admin-only endpoints stay admin-only
+  const t1 = await a1.req('POST', '/api/settings/tags', { label: 'Asked for discount' });
+  assert.equal(t1.status, 201); assert.equal(t1.body.data.category, 'remark_tag'); assert.equal(t1.body.data.value_key, 'asked_for_discount');
+  const t2 = await admin.req('POST', '/api/settings/tags', { label: 'asked for discount' });
+  assert.equal(t2.body.data.id, t1.body.data.id, 'idempotent by name');
+  assert.equal((await admin.req('POST', '/api/settings/tags', { label: '  ' })).status, 400);
+  assert.equal((await a1.req('POST', '/api/settings/values', { category: 'remark_tag', label: 'x' })).status, 403);
+  assert.equal((await admin.req('POST', `/api/leads/${lead.id}/remarks`, { tag_ids: [t1.body.data.id] })).status, 201);
+  // used tags cannot be deleted, only switched off; switched-off tags cannot be newly applied
+  assert.equal((await admin.req('DELETE', `/api/settings/values/${t1.body.data.id}`)).status, 409);
+  assert.equal((await admin.req('PATCH', `/api/settings/values/${t1.body.data.id}`, { is_active: false })).status, 200);
+  assert.equal((await admin.req('POST', `/api/leads/${lead.id}/remarks`, { tag_ids: [t1.body.data.id] })).status, 400);
+  assert.equal((await admin.req('POST', '/api/settings/tags', { label: 'Asked for discount' })).status, 409);
+  assert.ok((await admin.req('GET', '/api/settings/categories')).body.data.includes('remark_tag'));
+});
+
+test('new statuses exist and are Active; creation-date lead filters (today / yesterday / last 7 days)', async () => {
+  const st = (await admin.req('GET', '/api/settings/values?category=lead_status')).body.data;
+  for (const key of ['few_days_later', 'least_interested']) assert.equal(st.find((v) => v.value_key === key)?.status_category, 'active', key);
+  const mk = async (name, createdAt) => (await admin.req('POST', '/api/leads', { phone: `98${Math.floor(10000000 + Math.random() * 89999999)}`, nickname: name, created_at: createdAt })).body.data;
+  const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const day = (n) => new Date(Date.parse(nowIst) + n * 86400000).toISOString().slice(0, 10);
+  await mk('FiltToday', `${nowIst}T00:01`); await mk('FiltYesterday', `${day(-1)}T23:59`); await mk('FiltSixAgo', `${day(-6)}T00:00`); await mk('FiltEightAgo', `${day(-8)}T12:00`);
+  const names = async (df) => (await admin.req('GET', `/api/leads?tab=leads&dateFilter=${df}&q=Filt&pageSize=100`)).body.data.map((l) => l.nickname).sort();
+  assert.deepEqual(await names('today_leads'), ['FiltToday']);
+  assert.deepEqual(await names('yesterday_leads'), ['FiltYesterday']);
+  assert.deepEqual(await names('last7_leads'), ['FiltSixAgo', 'FiltToday', 'FiltYesterday']);
+  const counts = (await admin.req('GET', '/api/leads/date-counts?tab=leads&q=Filt')).body.data;
+  assert.equal(counts.today_leads, 1); assert.equal(counts.yesterday_leads, 1); assert.equal(counts.last7_leads, 3); assert.equal(counts.all, 4);
+});
+
+test('login lasts 7 days (cookie and token)', async () => {
+  const res = await fetch(srv.base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-requested-with': 'piweb-crm' }, body: JSON.stringify({ email: 'admin@t.test', password: 'password-admin-1' }) });
+  const sc = res.headers.get('set-cookie');
+  assert.match(sc, /Max-Age=604800/);
+  const token = sc.split(';')[0].split('=')[1];
+  const { exp, iat } = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+  assert.equal(exp - iat, 7 * 24 * 3600);
+});
+
+test('note categories: create/rename/delete, notes live in categories, kind controls the subject, ordering', async () => {
+  const cats0 = (await admin.req('GET', '/api/notes/categories')).body.data;
+  assert.deepEqual(cats0.map((c) => c.name).slice(0, 2), ['WhatsApp', 'Email'], 'default categories');
+  const web = await a1.req('POST', '/api/notes/categories', { name: 'Website Template' });
+  assert.equal(web.status, 201); assert.equal(web.body.data.notes, 0); assert.match(web.body.data.colour, /^#[0-9a-f]{6}$/i);
+  assert.equal((await admin.req('POST', '/api/notes/categories', { name: 'website template' })).status, 409, 'unique by name (case-insensitive collation)');
+  assert.equal((await admin.req('POST', '/api/notes/categories', { name: '  ' })).status, 400);
+  assert.equal((await new Client(srv.base).req('GET', '/api/notes/categories')).status, 401);
+  const wa = cats0.find((c) => c.name === 'WhatsApp');
+
+  // validation
+  assert.equal((await admin.req('POST', '/api/notes', { category_id: web.body.data.id, kind: 'email', title: 'No subject', content: 'x' })).status, 400);
+  assert.equal((await admin.req('POST', '/api/notes', { category_id: 999999, kind: 'message', title: 't', content: 'x' })).status, 400);
+  assert.equal((await admin.req('POST', '/api/notes', { category_id: web.body.data.id, kind: 'sms', title: 't', content: 'x' })).status, 400);
+  assert.equal((await admin.req('POST', '/api/notes', { category_id: web.body.data.id, kind: 'message', title: '  ', content: 'x' })).status, 400);
+
+  const t1 = (await admin.req('POST', '/api/notes', { category_id: web.body.data.id, kind: 'email', title: 'Landing page quote', subject: 'Your website quote', content: 'Dear client…' })).body.data;
+  const t2 = (await admin.req('POST', '/api/notes', { category_id: web.body.data.id, kind: 'message', title: 'Portfolio link', content: 'See our work: https://…', subject: 'ignored' })).body.data;
+  const m1 = (await admin.req('POST', '/api/notes', { category_id: wa.id, kind: 'message', title: 'Hello', content: 'Hi!' })).body.data;
+  assert.equal(t1.category_name, 'Website Template'); assert.equal(t2.subject, null, 'plain messages have no subject');
+
+  // filter by category + counts
+  const inWeb = await admin.req('GET', `/api/notes?category_id=${web.body.data.id}`);
+  assert.deepEqual(inWeb.body.data.map((n) => n.id).sort(), [t1.id, t2.id].sort());
+  assert.equal(inWeb.body.meta.categories.find((c) => c.id === web.body.data.id).notes, 2);
+  assert.equal((await admin.req('GET', '/api/notes?q=portfolio')).body.data.length, 1);
+
+  // most recently copied first inside a category; subject copies do not count
+  await admin.req('POST', `/api/notes/${t1.id}/copy`, {}); await new Promise((r) => setTimeout(r, 15));
+  await admin.req('POST', `/api/notes/${t2.id}/copy`, {});
+  assert.equal((await admin.req('GET', `/api/notes?category_id=${web.body.data.id}`)).body.data[0].id, t2.id);
+  await admin.req('POST', `/api/notes/${t1.id}/copy`, { part: 'subject' });
+  assert.equal((await admin.req('GET', `/api/notes?category_id=${web.body.data.id}`)).body.data[0].id, t2.id);
+  assert.equal((await admin.req('POST', `/api/notes/${t1.id}/copy`, {})).body.data.copy_count, 2);
+  assert.equal((await admin.req('GET', `/api/notes?category_id=${web.body.data.id}`)).body.data[0].id, t1.id);
+
+  // move a note to another category, switch kind
+  const moved = await admin.req('PATCH', `/api/notes/${t1.id}`, { category_id: wa.id, kind: 'message' });
+  assert.equal(moved.body.data.category_name, 'WhatsApp'); assert.equal(moved.body.data.subject, null);
+  assert.equal((await admin.req('PATCH', `/api/notes/${t1.id}`, { kind: 'email' })).status, 400, 'switching to email requires a subject');
+
+  // rename, recolour; delete only when empty
+  const ren = await admin.req('PATCH', `/api/notes/categories/${web.body.data.id}`, { name: 'Website Templates', colour: '#112233' });
+  assert.equal(ren.body.data.name, 'Website Templates'); assert.equal(ren.body.data.colour, '#112233');
+  assert.equal((await admin.req('PATCH', `/api/notes/categories/${web.body.data.id}`, { name: 'WhatsApp' })).status, 409);
+  const blocked = await admin.req('DELETE', `/api/notes/categories/${web.body.data.id}`);
+  assert.equal(blocked.status, 409); assert.equal(blocked.body.error.details.notes, 1);
+  await a1.req('DELETE', `/api/notes/${t2.id}`).then(async (x) => { if (x.status === 403) await admin.req('DELETE', `/api/notes/${t2.id}`); });
+  assert.equal((await admin.req('DELETE', `/api/notes/categories/${web.body.data.id}`)).status, 200);
+  assert.equal((await admin.req('DELETE', `/api/notes/categories/${web.body.data.id}`)).status, 404);
+
+  // author-or-admin delete rule still applies
+  assert.equal((await a1.req('DELETE', `/api/notes/${m1.id}`)).status, 403);
+  assert.equal((await admin.req('DELETE', `/api/notes/${m1.id}`)).status, 200);
 });

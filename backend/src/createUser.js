@@ -9,8 +9,8 @@ import { createUser } from './seed.js';
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   (async () => {
     const [email, password, role = 'agent', ...rest] = process.argv.slice(2);
-    if (!email || !password) throw new Error('Usage: node src/createUser.js <email> <password> [admin|agent] [name]');
-    if (!['admin', 'agent'].includes(role)) throw new Error('role must be admin or agent');
+    if (!email || !password) throw new Error('Usage: node src/createUser.js <email> <password> [admin|agent|telecaller] [name]');
+    if (!['admin', 'agent', 'telecaller'].includes(role)) throw new Error('role must be admin, agent or telecaller');
     const min = config.isProd ? 10 : 8;
     if (password.length < min) throw new Error(`password must be at least ${min} characters`);
     await migrate(() => {});

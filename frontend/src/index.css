@@ -20,3 +20,12 @@ body { background: #f4f6fb; -webkit-font-smoothing: antialiased; font-feature-se
 /* Chip-style selects: own chevron so the arrow never collides with the label */
 .chip-select { appearance: none; -webkit-appearance: none; background-repeat: no-repeat; background-position: right .55rem center; background-size: .6rem;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+
+/* Document typography: elegant serif for the brand/title, geometric sans for the body (same fonts as the PDF) */
+@font-face { font-family: 'Playfair Display'; font-weight: 700; font-display: swap; src: url('/fonts/PlayfairDisplay_700Bold.ttf') format('truetype'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 500; font-display: swap; src: url('/fonts/PlusJakartaSans_500Medium.ttf') format('truetype'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 600; font-display: swap; src: url('/fonts/PlusJakartaSans_600SemiBold.ttf') format('truetype'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 700; font-display: swap; src: url('/fonts/PlusJakartaSans_700Bold.ttf') format('truetype'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 800; font-display: swap; src: url('/fonts/PlusJakartaSans_800ExtraBold.ttf') format('truetype'); }
+.doc-sans { font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif; }
+.doc-serif { font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; }

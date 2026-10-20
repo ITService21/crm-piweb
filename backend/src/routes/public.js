@@ -6,6 +6,7 @@ import { ok } from '../lib/http.js';
 import { parse } from '../lib/validate.js';
 import { wrap } from '../lib/errors.js';
 import { createLead } from '../services/leads.js';
+import { documentPdfByToken } from '../services/billing.js';
 
 /** Open to the internet by design: per-IP throttle on top of field whitelisting and a honeypot. */
 export const publicLeadLimiter = rateLimit({
@@ -51,4 +52,19 @@ export const publicLeadHandler = wrap(async (req, res) => {
 
 const r = Router();
 r.post('/leads', publicLeadLimiter, publicLeadHandler);
+
+// Read-only PDF behind an unguessable link (shared e.g. over WhatsApp). Throttled per visitor; never indexed or cached.
+const pdfLimiter = rateLimit({
+  windowMs: 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false, keyGenerator: (req) => ipKeyGenerator(req.ip),
+  skip: () => process.env.NODE_ENV === 'test', message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+});
+r.get('/documents/:token/pdf', pdfLimiter, wrap(async (req, res) => {
+  const { buffer, filename } = await documentPdfByToken(req.params.token);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Content-Length', buffer.length);
+  res.end(buffer);
+}));
 export default r;

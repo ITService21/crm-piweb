@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const env = process.env;
 const isProd = env.NODE_ENV === 'production';
@@ -30,5 +32,18 @@ export const config = {
   publicApiKey: env.PUBLIC_API_KEY || '',
   cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE === 'true' : isProd,
   trustProxy: env.TRUST_PROXY ? Number(env.TRUST_PROXY) : 0,
-  sessionHours: 12,
+  // Outgoing email (quotations/invoices). Leave SMTP_HOST empty to disable sending; PDFs can still be downloaded.
+  smtp: {
+    host: env.SMTP_HOST || '',
+    port: Number(env.SMTP_PORT || 587),
+    secure: env.SMTP_SECURE === 'true', // true for port 465 (implicit TLS); false for 587 (STARTTLS)
+    user: env.SMTP_USER || '',
+    pass: env.SMTP_PASS || '',
+    from: env.MAIL_FROM || env.SMTP_USER || '',
+    replyTo: env.MAIL_REPLY_TO || '',
+  },
+  // How long a login lasts. Disabled users are still locked out immediately (checked on every request).
+  // Where uploaded payment proofs are stored (outside any web root; served only through authenticated API calls). Back this folder up with the database.
+  uploadDir: env.UPLOAD_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'uploads'),
+  sessionHours: Math.max(1, Number(env.SESSION_DAYS || 7)) * 24,
 };

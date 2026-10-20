@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { get, patch, post } from '../lib/api';
-import type { Activity, Lead, Remark } from '../lib/types';
+import { Link, useNavigate } from 'react-router-dom';
+import type { Activity, Lead, LeadDocRow, Remark } from '../lib/types';
+import { StatusBadge } from './billing/StatusBadge';
+import { fmtDay, money, routeBase } from '../lib/billing';
 import { fmtDateTime, toInputValue } from '../lib/time';
 import { useAuth, useData } from '../store';
 import { useRealtime } from '../realtime';
 import { ErrorState, Spinner, errMsg } from './ui';
 import { PhoneCell } from './PhoneCell';
 import { RemoveLeadModal } from './RemoveLeadModal';
+import { TagChip, TagPicker } from './TagPicker';
 
 const ACTION_ICON: Record<string, string> = {
   lead_created: '＋', status_changed: '⇄', followup_scheduled: '⏰', followup_rescheduled: '⏰', followup_cleared: '✓',
@@ -21,7 +25,10 @@ export function LeadDrawer({ leadId, onClose, onChanged }: { leadId: number; onC
   const [lead, setLead] = useState<Lead | null>(null);
   const [acts, setActs] = useState<Activity[] | null>(null);
   const [remarks, setRemarks] = useState<Remark[] | null>(null);
+  const [docs, setDocs] = useState<LeadDocRow[] | null>(null);
+  const nav = useNavigate();
   const [newRemark, setNewRemark] = useState('');
+  const [remarkTags, setRemarkTags] = useState<number[]>([]);
   const [remarkBusy, setRemarkBusy] = useState(false);
   const [err, setErr] = useState('');
   const [tab, setTab] = useState<'details' | 'activity'>('details');
@@ -38,10 +45,11 @@ export function LeadDrawer({ leadId, onClose, onChanged }: { leadId: number; onC
         nickname: l.nickname ?? '', business_name: l.business_name ?? '', requirement: l.requirement ?? '', budget: l.budget ?? '', phone: l.phone ?? '', email: l.email ?? '', message: l.message ?? '',
         status_id: String(l.status.id), enquiry_type_id: String(l.enquiry_type?.id ?? ''), source_id: String(l.source?.id ?? ''),
         special_markup_id: String(l.special_markup?.id ?? ''), assigned_to: String(l.assigned_to?.id ?? ''),
-        next_followup_at: toInputValue(l.next_followup_at, tz),
+        next_followup_at: toInputValue(l.next_followup_at, tz), created_at: toInputValue(l.created_at, tz),
       });
       setActs((await get<Activity[]>(`/leads/${leadId}/activities`)).data);
       setRemarks((await get<Remark[]>(`/leads/${leadId}/remarks`)).data);
+      get<LeadDocRow[]>(`/billing/by-lead/${leadId}`).then((r) => setDocs(r.data)).catch(() => setDocs([]));
     } catch (e) { setErr(errMsg(e)); }
   }, [leadId, tz]);
   useEffect(() => { void load(); markLeadRead(leadId); }, [load, leadId, markLeadRead]);
@@ -52,9 +60,9 @@ export function LeadDrawer({ leadId, onClose, onChanged }: { leadId: number; onC
   }, [version, leadId]);
 
   const addRemark = async () => {
-    if (!newRemark.trim() || remarkBusy) return;
+    if ((!newRemark.trim() && !remarkTags.length) || remarkBusy) return;
     setRemarkBusy(true);
-    try { await post(`/leads/${leadId}/remarks`, { text: newRemark }); setNewRemark(''); toast('info', 'Remark added'); onChanged(); await load(); }
+    try { await post(`/leads/${leadId}/remarks`, { text: newRemark, tag_ids: remarkTags }); setNewRemark(''); setRemarkTags([]); toast('info', 'Remark added'); onChanged(); await load(); }
     catch (e) { toast('error', 'Could not add remark', errMsg(e)); }
     finally { setRemarkBusy(false); }
   };
@@ -71,6 +79,7 @@ export function LeadDrawer({ leadId, onClose, onChanged }: { leadId: number; onC
     const ids: [string, number | undefined][] = [['enquiry_type_id', lead.enquiry_type?.id], ['source_id', lead.source?.id], ['special_markup_id', lead.special_markup?.id], ['assigned_to', lead.assigned_to?.id]];
     for (const [k, cur] of ids) if (num(form[k]) !== (cur ?? null)) body[k] = num(form[k]);
     if (form.next_followup_at !== toInputValue(lead.next_followup_at, tz)) body.next_followup_at = form.next_followup_at || null;
+    if (form.created_at && form.created_at !== toInputValue(lead.created_at, tz)) body.created_at = form.created_at; // only when edited
     if (!Object.keys(body).length) { toast('info', 'No changes to save'); return; }
     setBusy(true);
     try { await patch(`/leads/${lead.id}`, body); toast('info', 'Lead updated'); onChanged(); await load(); }
@@ -137,6 +146,7 @@ export function LeadDrawer({ leadId, onClose, onChanged }: { leadId: number; onC
               <div><label className="label">Business name</label><input className="input" value={form.business_name} onChange={set('business_name')} maxLength={190} /></div>
               <div><label className="label">Budget</label><input className="input" value={form.budget} onChange={set('budget')} maxLength={100} /></div>
               <div className="sm:col-span-2"><label className="label">Requirement (as submitted)</label><input className="input" value={form.requirement} onChange={set('requirement')} maxLength={255} /></div>
+              <div className="sm:col-span-2"><label className="label">Lead created on ({tz})</label><input className="input" type="datetime-local" value={form.created_at ?? ''} max={toInputValue(new Date().toISOString(), tz)} onChange={set('created_at')} /></div>
               <div className="sm:col-span-2"><label className="label">Enquiry message</label><textarea className="input min-h-[80px]" value={form.message} onChange={set('message')} maxLength={5000} /></div>
               <div><label className="label">Next follow-up ({tz})</label><input className="input" type="datetime-local" value={form.next_followup_at} onChange={set('next_followup_at')} /></div>
 
@@ -156,21 +166,48 @@ export function LeadDrawer({ leadId, onClose, onChanged }: { leadId: number; onC
               <p className="sm:col-span-2 text-[11px] text-slate-500">Last action by {lead.last_action_by?.name ?? 'System'} · {fmtDateTime(lead.last_action_at, tz)}</p>
             </fieldset>
 
+            {/* Quotations & invoices raised for this lead */}
+            <section className="mt-5 border-t border-slate-200 pt-4" aria-label="Quotations and invoices">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">Quotations &amp; invoices{docs && <span className="rounded-full bg-slate-100 px-1.5 text-[11px] font-medium tabular-nums text-slate-600">{docs.length}</span>}</h3>
+                {!lead.removed && me!.role !== 'telecaller' && (
+                  <div className="flex gap-1.5">
+                    <button type="button" className="btn btn-ghost !py-1 text-xs" onClick={() => nav(`/quotations/new?lead=${lead.id}`)}>＋ Generate quotation</button>
+                    <button type="button" className="btn btn-primary !py-1 text-xs" onClick={() => nav(`/invoices/new?lead=${lead.id}`)}>＋ Generate invoice</button>
+                  </div>
+                )}
+              </div>
+              {!docs ? <Spinner label="Loading…" /> : docs.length === 0 ? <p className="py-2 text-center text-xs text-slate-400">None yet. A client usually asks for a quotation first.</p> : (
+                <ul className="space-y-1.5">
+                  {docs.map((d) => (
+                    <li key={d.id}>
+                      <Link to={`${routeBase(d.type)}/${d.id}`} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm transition hover:border-brand-500 hover:bg-brand-50/40">
+                        <span className="min-w-0"><span className="block truncate font-mono text-xs font-semibold text-brand-700">{d.doc_number}</span><span className="text-[11px] text-slate-500">{d.type === 'invoice' ? 'Invoice' : 'Quotation'} · {fmtDay(d.created_at.slice(0, 10))}</span></span>
+                        <span className="flex shrink-0 items-center gap-2"><span className="font-semibold tabular-nums text-slate-900">{money(d.total, d.currency)}</span><StatusBadge status={d.status} overdue={d.is_overdue} expired={d.is_expired} size="sm" /></span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
             {/* All remarks, newest first, at the end of the details */}
             <section className="mt-5 border-t border-slate-200 pt-4" aria-label="Remarks">
               <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-900">Remarks{remarks && <span className="rounded-full bg-slate-100 px-1.5 text-[11px] font-medium tabular-nums text-slate-600">{remarks.length}</span>}</h3>
               {!lead.removed && (
                 <div className="mb-3">
+                  <div className="mb-2"><TagPicker selected={remarkTags} onChange={setRemarkTags} /></div>
                   <textarea className="input min-h-[64px]" maxLength={5000} value={newRemark} onChange={(e) => setNewRemark(e.target.value)} placeholder="Add a remark…"
                     onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void addRemark(); }} aria-label="New remark" />
-                  <div className="mt-1.5 flex justify-end"><button className="btn btn-primary !py-1.5 text-xs" disabled={remarkBusy || !newRemark.trim()} onClick={addRemark}>{remarkBusy ? 'Saving…' : 'Add remark'}</button></div>
+                  <div className="mt-1.5 flex justify-end"><button className="btn btn-primary !py-1.5 text-xs" disabled={remarkBusy || (!newRemark.trim() && !remarkTags.length)} onClick={addRemark}>{remarkBusy ? 'Saving…' : 'Add remark'}</button></div>
                 </div>
               )}
               {!remarks ? <Spinner label="Loading remarks…" /> : remarks.length === 0 ? <p className="py-3 text-center text-xs text-slate-400">No remarks yet.</p> : (
                 <ol className="space-y-2">
                   {remarks.map((r) => (
                     <li key={r.id} className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                      <p className="whitespace-pre-wrap break-words text-sm text-slate-800">{r.text}</p>
+                      {r.tags.length > 0 && <div className="mb-1 flex flex-wrap gap-1">{r.tags.map((t) => <TagChip key={t.id} tag={t} small />)}</div>}
+                      {r.text && <p className="whitespace-pre-wrap break-words text-sm text-slate-800">{r.text}</p>}
                       <p className="mt-1 text-[11px] text-slate-500"><b>{r.author ?? 'Unknown'}</b> · {fmtDateTime(r.created_at, tz)}</p>
                     </li>
                   ))}

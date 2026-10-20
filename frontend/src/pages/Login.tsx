@@ -14,7 +14,7 @@ export function LoginPage() {
     <div className="flex min-h-full items-center justify-center bg-slate-100 p-4">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-xl border bg-white p-6 shadow-sm">
         <div className="text-center">
-          <div className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-xl bg-brand-600 text-lg font-bold text-white">P</div>
+          <img src="/logo.png" alt="Piweb" className="mx-auto mb-2 h-16 w-auto" />
           <h1 className="text-lg font-semibold">Piweb CRM</h1>
           <p className="text-xs text-slate-500">Sign in to manage leads</p>
         </div>

@@ -5,9 +5,12 @@ process.env.DB_PASSWORD = process.env.TEST_DB_PASSWORD ?? ''; // never inherit t
 process.env.DB_HOST = '127.0.0.1';
 process.env.DB_SOCKET = process.env.DB_SOCKET || '/tmp/pwcrm.sock';
 process.env.BUSINESS_TZ = 'Asia/Kolkata';
+process.env.UPLOAD_DIR = process.env.TEST_UPLOAD_DIR || '/tmp/pwcrm-test-uploads'; // test proofs never land in the project folder
 process.env.PUBLIC_API_KEY = 'test-public-key';
 process.env.JWT_SECRET = 'test-secret-test-secret-test-secret-123';
 process.env.COOKIE_SECURE = 'false';
+// Never let a developer's real SMTP settings (.env) leak into automated tests
+for (const k of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM', 'MAIL_REPLY_TO']) process.env[k] = '';
 
 import http from 'node:http';
 import { DateTime } from 'luxon';
@@ -27,11 +30,13 @@ export async function resetDb() {
   await seedDefaults();
 }
 
-export async function makeUsers() {
+export async function makeUsers({ telecaller = false } = {}) {
   const admin = await createUser({ name: 'Admin', email: 'admin@t.test', password: 'password-admin-1', role: 'admin' });
   const a1 = await createUser({ name: 'Agent One', email: 'a1@t.test', password: 'password-agent-1', role: 'agent' });
   const a2 = await createUser({ name: 'Agent Two', email: 'a2@t.test', password: 'password-agent-2', role: 'agent' });
+  const t1 = telecaller ? await createUser({ name: 'Tele One', email: 't1@t.test', password: 'password-tele-1', role: 'telecaller' }) : null;
   return {
+    t1: t1 && { id: t1, role: 'telecaller', name: 'Tele One' },
     admin: { id: admin, role: 'admin', name: 'Admin' },
     a1: { id: a1, role: 'agent', name: 'Agent One' },
     a2: { id: a2, role: 'agent', name: 'Agent Two' },

@@ -40,5 +40,5 @@ export function csrfGuard(req, _res, next) {
 }
 
 export const permissionsFor = (role) => (role === 'admin'
-  ? ['leads:read', 'leads:write', 'leads:assign_any', 'settings:manage', 'users:manage']
-  : ['leads:read', 'leads:write']);
+  ? ['leads:read', 'leads:write', 'leads:assign_any', 'settings:manage', 'users:manage', 'billing:write']
+  : role === 'agent' ? ['leads:read', 'leads:write', 'billing:write'] : ['leads:read', 'leads:write']);

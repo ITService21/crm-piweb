@@ -1,6 +1,7 @@
 import type { Lead, SelectableValue } from '../lib/types';
 import { followupInfo, fmtDateTime, fmtShort, fmtTime } from '../lib/time';
 import { ContactButtons, PhoneCell } from './PhoneCell';
+import { TagChip } from './TagPicker';
 
 const ClockIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
 const ChatIcon = ({ size = 18 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" /></svg>;
@@ -160,7 +161,8 @@ export function LeadTable(p: LeadTableProps) {
                   <td className="px-3 py-2">
                     <button onClick={() => p.onRemarks(l)} className="block w-full max-w-[16rem] rounded-lg p-1.5 text-left hover:bg-slate-100" title="View all remarks / add a remark">
                       {l.last_remark ? (<>
-                        <span className="line-clamp-2 break-words text-xs text-slate-700">{l.last_remark.text}</span>
+                        {l.last_remark.tags.length > 0 && <span className="mb-0.5 flex flex-wrap gap-1">{l.last_remark.tags.map((t) => <TagChip key={t.id} tag={t} small />)}</span>}
+                        {l.last_remark.text && <span className="line-clamp-2 break-words text-xs text-slate-700">{l.last_remark.text}</span>}
                         <span className="mt-0.5 block text-[10px] text-slate-400">{l.last_remark.by} · {fmtShort(l.last_remark.at, tz)}{l.remarks_count > 1 && ` · ${l.remarks_count} remarks`}</span>
                       </>) : <span className="text-xs text-slate-400">+ Add remark</span>}
                     </button>
@@ -217,7 +219,11 @@ export function LeadTable(p: LeadTableProps) {
                 </div>
 
                 {l.last_remark && (
-                  <button onClick={() => p.onRemarks(l)} className="mt-2 block w-full truncate rounded-lg bg-slate-50 px-2 py-1 text-left text-xs italic text-slate-600">“{l.last_remark.text}”</button>
+                  <button onClick={() => p.onRemarks(l)} className="mt-2 flex w-full items-center gap-1.5 overflow-hidden rounded-lg bg-slate-50 px-2 py-1 text-left text-xs text-slate-600">
+                    {l.last_remark.tags.slice(0, 2).map((t) => <TagChip key={t.id} tag={t} small />)}
+                    {l.last_remark.tags.length > 2 && <span className="shrink-0 text-[10px] text-slate-400">+{l.last_remark.tags.length - 2}</span>}
+                    {l.last_remark.text && <span className="min-w-0 flex-1 truncate italic">“{l.last_remark.text}”</span>}
+                  </button>
                 )}
               </div>
               <div className="grid grid-cols-2 gap-2 border-t border-slate-100 bg-slate-50/70 px-3 py-2">

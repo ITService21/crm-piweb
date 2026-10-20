@@ -25,7 +25,7 @@ r.get('/', wrap(async (req, res) => {
 r.post('/', requireAdmin, wrap(async (req, res) => {
   const d = parse(z.object({
     name: z.string().trim().min(1).max(120), email: z.string().trim().toLowerCase().email().max(190),
-    password, role: z.enum(['admin', 'agent']).default('agent'),
+    password, role: z.enum(['admin', 'agent', 'telecaller']).default('agent'),
   }), req.body);
   try {
     const newId = await createUser(d);
@@ -39,7 +39,7 @@ r.post('/', requireAdmin, wrap(async (req, res) => {
 r.patch('/:id', requireAdmin, wrap(async (req, res) => {
   const uid = id(req);
   const d = parse(z.object({
-    name: z.string().trim().min(1).max(120).optional(), role: z.enum(['admin', 'agent']).optional(),
+    name: z.string().trim().min(1).max(120).optional(), role: z.enum(['admin', 'agent', 'telecaller']).optional(),
     is_active: z.boolean().optional(), password: password.optional(),
   }).strict(), req.body);
   const [[cur]] = await pool.query('SELECT * FROM users WHERE id = ?', [uid]);

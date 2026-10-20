@@ -2,17 +2,18 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { io, type Socket } from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
 import { get, post, put } from './lib/api';
-import { getSoundState, playChime, subscribeSound, unlockSound, type SoundState } from './lib/sound';
+import { getSoundState, playChime, subscribeSound, unlockSound, wasEverUnlocked, type SoundState } from './lib/sound';
 import { fmtTime } from './lib/time';
 import { useAuth } from './store';
 import type { NewLeadEvent, Summary } from './lib/types';
 
-interface Toast { id: string; kind: 'lead' | 'info' | 'error'; title: string; body?: string; lead?: NewLeadEvent }
+interface Toast { id: string; kind: 'lead' | 'info' | 'error' | 'warn'; title: string; body?: string; lead?: NewLeadEvent }
 interface RtCtx {
   version: number; summary: Summary; refreshSummary(): void; refresh(): void; connected: boolean;
   soundState: SoundState; enableSound(): Promise<void>; setSoundEnabled(on: boolean): Promise<void>;
   setBrowserNotifications(on: boolean): Promise<void>;
-  toast(kind: 'info' | 'error', title: string, body?: string): void;
+  /** 'info' confirmations are intentionally silent (the screen already shows the result); 'warn' and 'error' are shown. */
+  toast(kind: 'info' | 'error' | 'warn', title: string, body?: string): void;
   markLeadRead(leadId: number): void;
 }
 const Rt = createContext<RtCtx>(null!);
@@ -26,7 +27,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { me, setPrefs } = useAuth();
   const nav = useNavigate();
   const [version, setVersion] = useState(0);
-  const [summary, setSummary] = useState<Summary>({ unread_new_leads: 0, overdue_followups: 0, scheduled_followups: 0, removed: 0 });
+  const [summary, setSummary] = useState<Summary>({ unread_new_leads: 0, overdue_followups: 0, scheduled_followups: 0, removed: 0, payment_followups: 0 });
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [connected, setConnected] = useState(false);
   const [soundState, setSoundState] = useState<SoundState>(getSoundState());
@@ -35,6 +36,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   prefs.current = me?.preferences;
 
   useEffect(() => subscribeSound(() => setSoundState(getSoundState())), []);
+  useEffect(() => { if (wasEverUnlocked()) void unlockSound(); }, []);
 
   const refreshSummary = useCallback(() => {
     get<Summary>('/leads/summary').then((r) => setSummary(r.data)).catch(() => {});
@@ -42,7 +44,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const bump = useCallback(() => { setVersion((v) => v + 1); refreshSummary(); }, [refreshSummary]);
 
   const dismiss = useCallback((id: string) => setToasts((t) => t.filter((x) => x.id !== id)), []);
-  const toast = useCallback((kind: 'info' | 'error', title: string, body?: string) => {
+  const toast = useCallback((kind: 'info' | 'error' | 'warn', title: string, body?: string) => {
+    if (kind === 'info') return; // no pop-ups for routine updates
     const id = `t${Date.now()}${Math.random()}`;
     setToasts((t) => [...t, { id, kind, title, body }]);
     window.setTimeout(() => dismiss(id), 5000);
@@ -116,7 +119,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="pointer-events-none fixed right-3 top-3 z-[60] flex w-[calc(100vw-1.5rem)] max-w-sm flex-col gap-2" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} role="status" className={`pointer-events-auto rounded-lg border bg-white p-3 shadow-lg ${t.kind === 'error' ? 'border-red-300' : t.kind === 'lead' ? 'border-brand-500' : 'border-slate-200'}`}>
+          <div key={t.id} role="status" className={`pointer-events-auto rounded-lg border bg-white p-3 shadow-lg ${t.kind === 'error' ? 'border-red-300' : t.kind === 'warn' ? 'border-amber-300' : t.kind === 'lead' ? 'border-brand-500' : 'border-slate-200'}`}>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-slate-900">{t.kind === 'lead' && <span aria-hidden>🔔 </span>}{t.title}</p>

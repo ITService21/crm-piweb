@@ -4,8 +4,10 @@ import type { SelectableValue, StatusCategory, UserLite } from '../lib/types';
 import { useAuth, useData } from '../store';
 import { useRealtime } from '../realtime';
 import { Badge, ErrorState, Modal, Spinner, errMsg } from '../components/ui';
+import { wasEverUnlocked } from '../lib/sound';
+import { money } from '../lib/billing';
 
-const CAT_LABEL: Record<string, string> = { lead_status: 'Lead Status', enquiry_type: 'Enquiry Form Type', special_markup: 'Special Markup', lead_source: 'Lead Source' };
+const CAT_LABEL: Record<string, string> = { lead_status: 'Lead Status', enquiry_type: 'Enquiry Form Type', special_markup: 'Special Markup', lead_source: 'Lead Source', remark_tag: 'Remark Tags' };
 const SECTION_LABEL: Record<StatusCategory, string> = { active: 'Leads (Active)', not_interested: 'Not Interested', converted: 'Converted' };
 const catLabel = (c: string) => CAT_LABEL[c] ?? c.replace(/_/g, ' ').replace(/^./, (x) => x.toUpperCase());
 
@@ -30,7 +32,10 @@ function Preferences() {
         <div><p className="text-sm font-medium">New-lead sound</p><p className="text-xs text-slate-500">Plays a short chime when a new lead arrives while this tab is open.</p></div>
         <Toggle on={p.sound_enabled} label="New-lead sound" onChange={(v) => run(() => setSoundEnabled(v))} />
       </div>
-      {p.sound_enabled && soundState !== 'ready' && (
+      {p.sound_enabled && soundState === 'blocked' && wasEverUnlocked() && (
+        <p className="rounded-md bg-slate-50 p-2 text-xs text-slate-600">Sound is on. Your browser re-locks audio after a refresh, so it switches back on automatically with your first click or tap on this page.</p>
+      )}
+      {p.sound_enabled && soundState !== 'ready' && !wasEverUnlocked() && (
         <div className="flex items-center justify-between rounded-md bg-amber-50 p-2 text-xs text-amber-900">
           <span>{soundState === 'unsupported' ? 'This browser does not support audio.' : 'Your browser blocks sound until you interact with the page.'}</span>
           {soundState === 'blocked' && <button className="btn btn-ghost !py-1 text-xs" onClick={() => enableSound()}>Enable sound</button>}
@@ -210,7 +215,7 @@ function Users() {
           <tbody className="divide-y">{rows.map((u) => (
             <tr key={u.id} className={u.is_active ? '' : 'text-slate-400'}>
               <td className="px-3 py-2 font-medium">{u.name}{u.id === me!.id && <span className="ml-1 text-xs text-slate-400">(you)</span>}</td><td className="px-3 py-2">{u.email}</td>
-              <td className="px-3 py-2"><select className="input !w-auto !py-1 text-xs" value={u.role} onChange={(e) => act(() => patch(`/users/${u.id}`, { role: e.target.value }), 'Role updated')}><option value="agent">Agent</option><option value="admin">Admin</option></select></td>
+              <td className="px-3 py-2"><select className="input !w-auto !py-1 text-xs" value={u.role} onChange={(e) => act(() => patch(`/users/${u.id}`, { role: e.target.value }), 'Role updated')}><option value="agent">Agent</option><option value="telecaller">Telecaller (view-only billing)</option><option value="admin">Admin</option></select></td>
               <td className="px-3 py-2"><Toggle on={!!u.is_active} label={`Active: ${u.name}`} onChange={(on) => act(() => patch(`/users/${u.id}`, { is_active: on }), on ? 'User enabled' : 'User disabled')} /></td>
               <td className="px-3 py-2 text-right text-xs"><button className="text-brand-700 hover:underline" onClick={() => { const p = window.prompt(`New password for ${u.name} (min 10 characters):`); if (p) void act(() => patch(`/users/${u.id}`, { password: p }), 'Password reset'); }}>Reset password</button></td>
             </tr>))}</tbody>
@@ -222,7 +227,7 @@ function Users() {
             <div><label className="label">Name</label><input className="input" required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
             <div><label className="label">Email</label><input className="input" type="email" required value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
             <div><label className="label">Temporary password (min 10 chars)</label><input className="input" type="password" minLength={10} required autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
-            <div><label className="label">Role</label><select className="input" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="agent">Agent</option><option value="admin">Admin</option></select></div>
+            <div><label className="label">Role</label><select className="input" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}><option value="agent">Agent</option><option value="telecaller">Telecaller (view-only billing)</option><option value="admin">Admin</option></select></div>
             <div className="flex justify-end gap-2"><button type="button" className="btn btn-ghost" onClick={() => setAdding(false)}>Cancel</button><button className="btn btn-primary">Create</button></div>
           </form>
         </Modal>
@@ -231,11 +236,84 @@ function Users() {
   );
 }
 
+interface Preset { id: number; name: string; description: string | null; unit_price: string; tax_rate: string | null; discount_type?: 'none' | 'percent' | 'amount'; discount_value?: string | null; is_default: boolean; is_active: boolean; sort_order: number }
+
+/** Starter services for quotations & invoices. "Default" ones are pre-filled on every new document; the rest appear as quick-add buttons. */
+function ServicePresets() {
+  const { toast } = useRealtime();
+  const [rows, setRows] = useState<Preset[] | null>(null); const [err, setErr] = useState('');
+  const [editing, setEditing] = useState<Preset | 'new' | null>(null);
+  const load = useCallback(() => { setErr(''); get<Preset[]>('/billing/presets?include_inactive=1').then((r) => setRows(r.data)).catch((e) => setErr(errMsg(e))); }, []);
+  useEffect(load, [load]);
+  const act = async (fn: () => Promise<unknown>) => { try { await fn(); load(); } catch (e) { toast('error', 'Action failed', errMsg(e)); } };
+  if (err) return <ErrorState message={err} onRetry={load} />;
+  if (!rows) return <Spinner />;
+  return (
+    <section>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="max-w-xl text-xs text-slate-500">Services that are <b>Default</b> appear automatically on every <b>new</b> quotation/invoice (you can still edit or remove them there). Others show as one-tap <b>Quick add</b> buttons. Existing documents keep the values they were created with.</p>
+        <button className="btn btn-primary" onClick={() => setEditing('new')}>＋ Add service</button>
+      </div>
+      <div className="scroll-thin overflow-x-auto rounded-lg border bg-white">
+        <table className="w-full min-w-[640px] text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2 text-left">Service</th><th className="px-3 py-2 text-right">Price</th><th className="px-3 py-2 text-right">Tax</th><th className="px-3 py-2 text-left">Default</th><th className="px-3 py-2 text-left">Active</th><th className="px-3 py-2" /></tr></thead>
+          <tbody className="divide-y">
+            {rows.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-500">No services yet.</td></tr>}
+            {rows.map((p) => (
+              <tr key={p.id} className={p.is_active ? '' : 'bg-slate-50 text-slate-400'}>
+                <td className="px-3 py-2"><p className="font-medium">{p.name}</p>{p.description && <p className="text-xs text-slate-500">{p.description}</p>}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{money(p.unit_price)}{p.discount_type && p.discount_type !== 'none' && p.discount_value && <span className="block text-[11px] text-emerald-700">{p.discount_type === 'percent' ? `${p.discount_value}% off` : `${money(p.discount_value)} off`}</span>}</td>
+                <td className="px-3 py-2 text-right text-xs tabular-nums">{p.tax_rate ? `${p.tax_rate}%` : '—'}</td>
+                <td className="px-3 py-2"><Toggle on={p.is_default} label={`Default: ${p.name}`} onChange={(v) => act(() => patch(`/billing/presets/${p.id}`, { is_default: v }))} /></td>
+                <td className="px-3 py-2"><Toggle on={p.is_active} label={`Active: ${p.name}`} onChange={(v) => act(() => patch(`/billing/presets/${p.id}`, { is_active: v }))} /></td>
+                <td className="whitespace-nowrap px-3 py-2 text-right text-xs">
+                  <button className="px-1.5 text-brand-700 hover:underline" onClick={() => setEditing(p)}>Edit</button>
+                  <button className="px-1.5 text-red-600 hover:underline" onClick={() => { if (window.confirm(`Delete "${p.name}"? Existing documents are not affected.`)) void act(() => del(`/billing/presets/${p.id}`)); }}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {editing && <PresetForm preset={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={load} />}
+    </section>
+  );
+}
+
+function PresetForm({ preset, onClose, onSaved }: { preset: Preset | null; onClose(): void; onSaved(): void }) {
+  const [f, setF] = useState({ name: preset?.name ?? '', description: preset?.description ?? '', unit_price: preset?.unit_price ?? '', tax_rate: preset?.tax_rate ?? '', discount_type: preset?.discount_type ?? 'none', discount_value: preset?.discount_value ?? '', is_default: preset?.is_default ?? true });
+  const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr('');
+    const body = { name: f.name, description: f.description || null, unit_price: f.unit_price, tax_rate: f.tax_rate.trim() === '' ? null : f.tax_rate, discount_type: f.discount_type, discount_value: f.discount_type === 'none' ? null : f.discount_value, is_default: f.is_default };
+    try { if (preset) await patch(`/billing/presets/${preset.id}`, body); else await post('/billing/presets', body); onSaved(); onClose(); } catch (ex) { setErr(errMsg(ex)); setBusy(false); }
+  };
+  return (
+    <Modal title={preset ? 'Edit service' : 'Add service'} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <div><label className="label">Service name</label><input className="input" required autoFocus maxLength={255} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+        <div><label className="label">Description (optional)</label><textarea className="input min-h-[60px]" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Unit price</label><input className="input" required inputMode="decimal" value={f.unit_price} onChange={(e) => setF({ ...f, unit_price: e.target.value })} /></div>
+          <div><label className="label">Tax % (optional)</label><input className="input" inputMode="decimal" placeholder="none" value={f.tax_rate} onChange={(e) => setF({ ...f, tax_rate: e.target.value })} /></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="label">Default discount</label><select className="input" value={f.discount_type} onChange={(e) => setF({ ...f, discount_type: e.target.value as typeof f.discount_type })}><option value="none">None</option><option value="percent">Percent (%)</option><option value="amount">Flat amount</option></select></div>
+          <div><label className="label">Discount value</label><input className="input" inputMode="decimal" disabled={f.discount_type === 'none'} required={f.discount_type !== 'none'} placeholder={f.discount_type === 'percent' ? 'e.g. 100' : ''} value={f.discount_value} onChange={(e) => setF({ ...f, discount_value: e.target.value })} /></div>
+        </div>
+        <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1" checked={f.is_default} onChange={(e) => setF({ ...f, is_default: e.target.checked })} /><span>Pre-fill on every new quotation / invoice</span></label>
+        {err && <p className="text-sm text-red-600" role="alert">{err}</p>}
+        <div className="flex justify-end gap-2"><button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>
+      </form>
+    </Modal>
+  );
+}
+
 export function SettingsPage() {
   const { me } = useAuth();
   const isAdmin = me!.role === 'admin';
-  const [tab, setTab] = useState<'prefs' | 'values' | 'users'>('prefs');
-  const tabs: [typeof tab, string, boolean][] = [['prefs', 'My preferences', true], ['values', 'Configurable values', isAdmin], ['users', 'Users', isAdmin]];
+  const [tab, setTab] = useState<'prefs' | 'values' | 'users' | 'presets'>('prefs');
+  const tabs: [typeof tab, string, boolean][] = [['prefs', 'My preferences', true], ['values', 'Configurable values', isAdmin], ['users', 'Users', isAdmin], ['presets', 'Service presets', isAdmin]];
   return (
     <div className="h-full overflow-y-auto"><div className="mx-auto max-w-5xl p-3 sm:p-5">
       <div className="mb-4 flex gap-1 border-b">
@@ -244,6 +322,7 @@ export function SettingsPage() {
       {tab === 'prefs' && <Preferences />}
       {tab === 'values' && isAdmin && <Values />}
       {tab === 'users' && isAdmin && <Users />}
+      {tab === 'presets' && isAdmin && <ServicePresets />}
     </div></div>
   );
 }

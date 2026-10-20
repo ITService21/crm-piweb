@@ -5,6 +5,8 @@ import { Layout } from './Layout';
 import { LoginPage } from './pages/Login';
 import { LeadListPage } from './pages/LeadListPage';
 import { SettingsPage } from './pages/Settings';
+import { DocumentListPage } from './pages/DocumentListPage';
+import { DocumentPage } from './pages/DocumentPage';
 import { Spinner } from './components/ui';
 
 function Gate() {
@@ -20,6 +22,10 @@ function Gate() {
             <Route path="/not-interested" element={<LeadListPage tab="not_interested" />} />
             <Route path="/converted" element={<LeadListPage tab="converted" />} />
             <Route path="/follow-ups" element={<LeadListPage tab="scheduled" />} />
+            <Route path="/quotations" element={<DocumentListPage type="quotation" />} />
+            <Route path="/quotations/:id" element={<DocumentPage type="quotation" />} />
+            <Route path="/invoices" element={<DocumentListPage type="invoice" />} />
+            <Route path="/invoices/:id" element={<DocumentPage type="invoice" />} />
             <Route path="/removed" element={<LeadListPage tab="removed" />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/leads" replace />} />

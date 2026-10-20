@@ -2,6 +2,7 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth, useData } from './store';
 import { useRealtime } from './realtime';
+import { wasEverUnlocked } from './lib/sound';
 import { NotesModal } from './components/NotesModal';
 
 /** Pages render their primary action (e.g. "Add lead") into the fixed header through this slot. */
@@ -14,6 +15,8 @@ const NAV: { to: string; label: string; icon: string; badge?: 'leads' }[] = [
   { to: '/not-interested', label: 'Not Interested', icon: '🚫' },
   { to: '/converted', label: 'Converted', icon: '✅' },
   { to: '/removed', label: 'Removed', icon: '🗑️' },
+  { to: '/quotations', label: 'Quotations', icon: '📝' },
+  { to: '/invoices', label: 'Invoices', icon: '🧾' },
   { to: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -44,6 +47,7 @@ export function Layout() {
           <span className="ml-auto flex items-center gap-1">
             {n.badge === 'leads' && <><CountBadge n={summary.unread_new_leads} tone="blue" title="Unread new leads" /><CountBadge n={summary.overdue_followups} tone="red" title="Overdue follow-ups" /></>}
             {n.to === '/removed' && summary.removed > 0 && <span className="text-[11px] tabular-nums text-slate-500" title="Removed leads">{summary.removed}</span>}
+            {n.to === '/invoices' && <CountBadge n={summary.payment_followups ?? 0} tone="red" title="Invoices with a payment follow-up due" />}
             {n.to === '/follow-ups' && summary.scheduled_followups > 0 && <span className="text-[11px] tabular-nums text-slate-500" title="Scheduled follow-ups">{summary.scheduled_followups}</span>}
           </span>
         </NavLink>
@@ -57,7 +61,7 @@ export function Layout() {
       <button className="w-full rounded-lg border border-white/15 py-1.5 text-slate-300 hover:bg-white/10" onClick={() => logout()}>Sign out</button>
     </div>
   );
-  const brand = <div className="flex items-center gap-2 px-4 py-4"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white shadow">P</span><span className="text-sm font-semibold tracking-wide text-white">CRM</span></div>;
+  const brand = <div className="flex items-center gap-2 px-4 py-4"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white p-1 shadow"><img src="/logo.png" alt="Piweb" className="h-full w-full object-contain" /></span><span className="text-sm font-semibold tracking-wide text-white">Piweb CRM</span></div>;
 
   return (
     <div className="flex h-full">
@@ -78,7 +82,7 @@ export function Layout() {
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></svg>
           </button>
           <div className="ml-auto flex items-center gap-2">
-            {me!.preferences.sound_enabled && soundState === 'blocked' && (
+            {me!.preferences.sound_enabled && soundState === 'blocked' && !wasEverUnlocked() && (
               <button className="flex h-9 shrink-0 items-center rounded-full bg-amber-100 px-2.5 text-xs font-medium text-amber-900 hover:bg-amber-200" onClick={() => enableSound()} title="Browsers block sound until you interact with the page">🔇<span className="hidden sm:inline"> Enable sound</span></button>
             )}
             <button onClick={doRefresh} title="Refresh" aria-label="Refresh data" disabled={spinning}

@@ -20,6 +20,8 @@ r.get('/values', wrap(async (req, res) => {
 }));
 r.get('/categories', wrap(async (_req, res) => ok(res, await sv.listCategories())));
 
+// Any signed-in user can create a remark tag (the label is all they supply); everything else in Settings stays admin-only.
+r.post('/tags', wrap(async (req, res) => ok(res, await sv.createTag(req.body), undefined, 201)));
 r.post('/values', requireAdmin, wrap(async (req, res) => ok(res, await sv.create(req.body), undefined, 201)));
 r.patch('/values/:id', requireAdmin, wrap(async (req, res) => ok(res, await sv.update(parse(z.coerce.number().int().positive(), req.params.id), req.body))));
 r.delete('/values/:id', requireAdmin, wrap(async (req, res) => {
